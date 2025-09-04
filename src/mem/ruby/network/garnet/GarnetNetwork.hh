@@ -75,6 +75,11 @@ class GarnetNetwork : public Network
     int getNumRows() const { return m_num_rows; }
     int getNumCols() { return m_num_cols; }
 
+    // for 3D topology
+    int getTorusX() const { return m_torus_x; }
+    int getTorusY() const { return m_torus_y; }
+    int getTorusZ() const { return m_torus_z; }
+
     // for network
     uint32_t getNiFlitSize() const { return m_ni_flit_size; }
     uint32_t getBuffersPerDataVC() { return m_buffers_per_data_vc; }
@@ -161,6 +166,9 @@ class GarnetNetwork : public Network
     // Configuration
     int m_num_rows;
     int m_num_cols;
+    int m_torus_x;
+    int m_torus_y;
+    int m_torus_z;
     uint32_t m_ni_flit_size;
     uint32_t m_max_vcs_per_vnet;
     uint32_t m_buffers_per_ctrl_vc;

@@ -65,6 +65,9 @@ GarnetNetwork::GarnetNetwork(const Params &p)
     : Network(p)
 {
     m_num_rows = p.num_rows;
+    m_torus_x = p.torus_x;
+    m_torus_y = p.torus_y;
+    m_torus_z = p.torus_z;
     m_ni_flit_size = p.ni_flit_size;
     m_max_vcs_per_vnet = 0;
     m_buffers_per_data_vc = p.buffers_per_data_vc;

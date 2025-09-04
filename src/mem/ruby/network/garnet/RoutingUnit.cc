@@ -30,6 +30,8 @@
 
 #include "mem/ruby/network/garnet/RoutingUnit.hh"
 
+#include <cmath>
+
 #include "base/cast.hh"
 #include "base/compiler.hh"
 #include "debug/RubyNetwork.hh"
@@ -193,6 +195,8 @@ RoutingUnit::outportCompute(RouteInfo route, int inport,
         // any custom algorithm
         case CUSTOM_: outport =
             outportComputeCustom(route, inport, inport_dirn); break;
+        case TORUS3D_: outport =
+            outportComputeTorus3D(route, inport, inport_dirn); break;
         default: outport =
             lookupRoutingTable(route.vnet, route.net_dest); break;
     }
@@ -268,6 +272,93 @@ RoutingUnit::outportComputeCustom(RouteInfo route,
                                  PortDirection inport_dirn)
 {
     panic("%s placeholder executed", __FUNCTION__);
+}
+
+// 3D Torus Dimension-Order Routing (DOR) Algorithm
+// Routes first in X, then Y, then Z dimension
+// Uses shortest path in each dimension considering torus wraparound
+int
+RoutingUnit::outportComputeTorus3D(RouteInfo route,
+                                   int inport,
+                                   PortDirection inport_dirn)
+{
+    PortDirection outport_dirn = "Unknown";
+
+    // Get torus dimensions from network
+    GarnetNetwork* garnet_net =
+        safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
+
+    // Get dimensions from network parameters
+    int dim_x = garnet_net->getTorusX();
+    int dim_y = garnet_net->getTorusY();
+    int dim_z = garnet_net->getTorusZ();
+
+    // Convert router IDs to 3D coordinates
+    int my_id = m_router->get_id();
+    int dest_id = route.dest_router;
+
+    // Convert to 3D coordinates
+    int my_z = my_id / (dim_x * dim_y);
+    int my_remainder = my_id % (dim_x * dim_y);
+    int my_y = my_remainder / dim_x;
+    int my_x = my_remainder % dim_x;
+
+    int dest_z = dest_id / (dim_x * dim_y);
+    int dest_remainder = dest_id % (dim_x * dim_y);
+    int dest_y = dest_remainder / dim_x;
+    int dest_x = dest_remainder % dim_x;
+
+    // Calculate distance in each dimension considering torus wraparound
+    auto torus_distance =
+        [](int curr, int dest, int dim_size) -> std::pair<int, bool> {
+        int forward_dist = (dest - curr + dim_size) % dim_size;
+        int backward_dist = (curr - dest + dim_size) % dim_size;
+
+        if (forward_dist <= backward_dist) {
+            return {forward_dist, true};  // true = forward direction
+        } else {
+            return {backward_dist, false}; // false = backward direction
+        }
+    };
+
+    auto [x_dist, x_forward] = torus_distance(my_x, dest_x, dim_x);
+    auto [y_dist, y_forward] = torus_distance(my_y, dest_y, dim_y);
+    auto [z_dist, z_forward] = torus_distance(my_z, dest_z, dim_z);
+
+    // Dimension-Order Routing: route X first, then Y, then Z
+    if (x_dist > 0) {
+        // Route in X dimension
+        if (x_forward) {
+            outport_dirn = "East";
+        } else {
+            outport_dirn = "West";
+        }
+    } else if (y_dist > 0) {
+        // Route in Y dimension
+        if (y_forward) {
+            outport_dirn = "North";
+        } else {
+            outport_dirn = "South";
+        }
+    } else if (z_dist > 0) {
+        // Route in Z dimension
+        if (z_forward) {
+            outport_dirn = "Up";
+        } else {
+            outport_dirn = "Down";
+        }
+    } else {
+        // Should not reach here as destination check is done in outportCompute
+        panic("All dimensions have zero distance in 3D Torus routing");
+    }
+
+    // Check if outport direction exists in the map
+    if (m_outports_dirn2idx.find(outport_dirn) == m_outports_dirn2idx.end()) {
+        panic("3D Torus routing: outport direction %s not found in router %d",
+              outport_dirn.c_str(), m_router->get_id());
+    }
+
+    return m_outports_dirn2idx[outport_dirn];
 }
 
 } // namespace garnet
