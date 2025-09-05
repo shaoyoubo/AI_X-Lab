@@ -105,7 +105,7 @@ class Torus3D(SimpleTopology):
         def coord_to_id(x, y, z):
             return z * self.dim_x * self.dim_y + y * self.dim_x + x
 
-        # Create links in X dimension (East-West)
+        # Create bidirectional links in X dimension (East-West)
         for z in range(self.dim_z):
             for y in range(self.dim_y):
                 for x in range(self.dim_x):
@@ -113,7 +113,7 @@ class Torus3D(SimpleTopology):
                     next_x = (x + 1) % self.dim_x  # Torus wrapping
                     next_id = coord_to_id(next_x, y, z)
 
-                    # East direction (from curr_id to next_id)
+                    # East direction link
                     int_links.append(
                         IntLink(
                             link_id=link_count,
@@ -127,7 +127,21 @@ class Torus3D(SimpleTopology):
                     )
                     link_count += 1
 
-        # Create links in Y dimension (North-South)
+                    # West direction link (reverse)
+                    int_links.append(
+                        IntLink(
+                            link_id=link_count,
+                            src_node=routers[next_id],
+                            dst_node=routers[curr_id],
+                            src_outport="West",
+                            dst_inport="East",
+                            latency=link_latency,
+                            weight=1,
+                        )
+                    )
+                    link_count += 1
+
+        # Create bidirectional links in Y dimension (North-South)
         for z in range(self.dim_z):
             for x in range(self.dim_x):
                 for y in range(self.dim_y):
@@ -135,7 +149,7 @@ class Torus3D(SimpleTopology):
                     next_y = (y + 1) % self.dim_y  # Torus wrapping
                     next_id = coord_to_id(x, next_y, z)
 
-                    # North direction (from curr_id to next_id)
+                    # North direction link
                     int_links.append(
                         IntLink(
                             link_id=link_count,
@@ -149,7 +163,21 @@ class Torus3D(SimpleTopology):
                     )
                     link_count += 1
 
-        # Create links in Z dimension (Up-Down)
+                    # South direction link (reverse)
+                    int_links.append(
+                        IntLink(
+                            link_id=link_count,
+                            src_node=routers[next_id],
+                            dst_node=routers[curr_id],
+                            src_outport="South",
+                            dst_inport="North",
+                            latency=link_latency,
+                            weight=1,
+                        )
+                    )
+                    link_count += 1
+
+        # Create bidirectional links in Z dimension (Up-Down)
         for y in range(self.dim_y):
             for x in range(self.dim_x):
                 for z in range(self.dim_z):
@@ -157,7 +185,7 @@ class Torus3D(SimpleTopology):
                     next_z = (z + 1) % self.dim_z  # Torus wrapping
                     next_id = coord_to_id(x, y, next_z)
 
-                    # Up direction (from curr_id to next_id)
+                    # Up direction link
                     int_links.append(
                         IntLink(
                             link_id=link_count,
@@ -165,6 +193,20 @@ class Torus3D(SimpleTopology):
                             dst_node=routers[next_id],
                             src_outport="Up",
                             dst_inport="Down",
+                            latency=link_latency,
+                            weight=1,
+                        )
+                    )
+                    link_count += 1
+
+                    # Down direction link (reverse)
+                    int_links.append(
+                        IntLink(
+                            link_id=link_count,
+                            src_node=routers[next_id],
+                            dst_node=routers[curr_id],
+                            src_outport="Down",
+                            dst_inport="Up",
                             latency=link_latency,
                             weight=1,
                         )

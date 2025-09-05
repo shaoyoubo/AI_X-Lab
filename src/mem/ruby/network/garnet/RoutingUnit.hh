@@ -83,6 +83,16 @@ class RoutingUnit
                               int inport,
                               PortDirection inport_dirn);
 
+    // Adaptive Routing for 3D Torus with Duato-style Escape VC
+    int outportComputeTorus3DAdaptive(RouteInfo route,
+                                     int inport,
+                                     PortDirection inport_dirn);
+
+    // Helper functions for adaptive routing
+    bool checkAdaptiveVCAvailability(int outport_idx);
+    int getDirectionCongestionScore(int outport_idx,
+                                    const PortDirection& direction);
+
     // Returns true if vnet is present in the vector
     // of vnets or if the vector supports all vnets.
     bool supportsVnet(int vnet, std::vector<int> sVnets);

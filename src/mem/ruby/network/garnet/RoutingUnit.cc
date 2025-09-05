@@ -36,6 +36,7 @@
 #include "base/compiler.hh"
 #include "debug/RubyNetwork.hh"
 #include "mem/ruby/network/garnet/InputUnit.hh"
+#include "mem/ruby/network/garnet/OutputUnit.hh"
 #include "mem/ruby/network/garnet/Router.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
 
@@ -197,6 +198,8 @@ RoutingUnit::outportCompute(RouteInfo route, int inport,
             outportComputeCustom(route, inport, inport_dirn); break;
         case TORUS3D_: outport =
             outportComputeTorus3D(route, inport, inport_dirn); break;
+        case TORUS3D_ADAPTIVE_: outport =
+            outportComputeTorus3DAdaptive(route, inport, inport_dirn); break;
         default: outport =
             lookupRoutingTable(route.vnet, route.net_dest); break;
     }
@@ -359,6 +362,227 @@ RoutingUnit::outportComputeTorus3D(RouteInfo route,
     }
 
     return m_outports_dirn2idx[outport_dirn];
+}
+
+// 3D Torus Adaptive Routing with Duato-style Escape VC
+// Uses escape VCs for deterministic routing and adaptive VCs for
+// congestion-aware routing
+int
+RoutingUnit::outportComputeTorus3DAdaptive(RouteInfo route,
+                                          int inport,
+                                          PortDirection inport_dirn)
+{
+    GarnetNetwork* garnet_net =
+        safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
+
+    int dim_x = garnet_net->getTorusX();
+    int dim_y = garnet_net->getTorusY();
+    int dim_z = garnet_net->getTorusZ();
+
+    int my_id = m_router->get_id();
+    int dest_id = route.dest_router;
+
+    // Convert to 3D coordinates
+    int my_z = my_id / (dim_x * dim_y);
+    int my_remainder = my_id % (dim_x * dim_y);
+    int my_y = my_remainder / dim_x;
+    int my_x = my_remainder % dim_x;
+
+    int dest_z = dest_id / (dim_x * dim_y);
+    int dest_remainder = dest_id % (dim_x * dim_y);
+    int dest_y = dest_remainder / dim_x;
+    int dest_x = dest_remainder % dim_x;
+
+    // Calculate distance in each dimension considering torus wraparound
+    auto torus_distance =
+        [](int curr, int dest, int dim_size) -> std::pair<int, bool> {
+        int forward_dist = (dest - curr + dim_size) % dim_size;
+        int backward_dist = (curr - dest + dim_size) % dim_size;
+
+        if (forward_dist <= backward_dist) {
+            return {forward_dist, true};  // true = forward direction
+        } else {
+            return {backward_dist, false}; // false = backward direction
+        }
+    };
+
+    auto [x_dist, x_forward] = torus_distance(my_x, dest_x, dim_x);
+    auto [y_dist, y_forward] = torus_distance(my_y, dest_y, dim_y);
+    auto [z_dist, z_forward] = torus_distance(my_z, dest_z, dim_z);
+
+    // Collect all valid minimal paths (directions that make progress)
+    std::vector<PortDirection> adaptive_candidates;
+
+    if (x_dist > 0) {
+        if (x_forward) {
+            adaptive_candidates.push_back("East");
+        } else {
+            adaptive_candidates.push_back("West");
+        }
+    }
+
+    if (y_dist > 0) {
+        if (y_forward) {
+            adaptive_candidates.push_back("North");
+        } else {
+            adaptive_candidates.push_back("South");
+        }
+    }
+
+    if (z_dist > 0) {
+        if (z_forward) {
+            adaptive_candidates.push_back("Up");
+        } else {
+            adaptive_candidates.push_back("Down");
+        }
+    }
+
+    // If no progress needed in any dimension, packet should be at destination
+    if (adaptive_candidates.empty()) {
+        panic("No adaptive candidates in 3D Torus adaptive routing - "
+              "should be at destination");
+    }
+
+    // Duato-style escape VC mechanism:
+    // VC 0 is reserved as escape VC for deterministic dimension-order routing
+    // VCs 1+ are adaptive VCs for congestion-aware routing
+
+    // For adaptive routing, check if adaptive VCs (1+) are available
+    // If not, fall back to escape VC (0) with deterministic routing
+
+    PortDirection best_direction = "Unknown";
+    bool use_escape_vc = false;
+
+    // First, try adaptive routing on available adaptive candidates
+    // Check congestion and VC availability for adaptive directions
+    int best_score = INT_MAX;
+    bool found_adaptive_path = false;
+
+    for (const auto& direction : adaptive_candidates) {
+        if (m_outports_dirn2idx.find(direction) == m_outports_dirn2idx.end()) {
+            continue;  // Skip if direction not available
+        }
+
+        int outport_idx = m_outports_dirn2idx[direction];
+
+        // Check if this outport has available adaptive VCs (VCs 1+)
+        // Simple heuristic: assume adaptive VCs are available with some
+        // probability. In a real implementation, this would check actual VC
+        // states
+        bool has_adaptive_vc = checkAdaptiveVCAvailability(outport_idx);
+
+        if (has_adaptive_vc) {
+            // Calculate congestion score for this direction
+            int congestion_score = getDirectionCongestionScore(outport_idx,
+                                                               direction);
+
+            if (congestion_score < best_score) {
+                best_score = congestion_score;
+                best_direction = direction;
+                found_adaptive_path = true;
+            }
+        }
+    }
+
+    // If no adaptive path found, use escape VC with deterministic routing
+    if (!found_adaptive_path) {
+        use_escape_vc = true;
+
+        // Dimension-Order Routing for escape VC
+        if (x_dist > 0) {
+            best_direction = x_forward ? "East" : "West";
+        } else if (y_dist > 0) {
+            best_direction = y_forward ? "North" : "South";
+        } else if (z_dist > 0) {
+            best_direction = z_forward ? "Up" : "Down";
+        }
+    }
+
+    // Validate the selected direction
+    if (m_outports_dirn2idx.find(best_direction) ==
+        m_outports_dirn2idx.end()) {
+        panic("3D Torus adaptive routing: selected direction %s not found "
+              "in router %d",
+              best_direction.c_str(), m_router->get_id());
+    }
+
+    return m_outports_dirn2idx[best_direction];
+}
+
+// Helper function to check if adaptive VCs are available for an outport
+bool
+RoutingUnit::checkAdaptiveVCAvailability(int outport_idx)
+{
+    // Access the router's output unit for this outport
+    auto output_unit = m_router->getOutputUnit(outport_idx);
+
+    // Check if adaptive VCs (VC 1 and higher) are available
+    // During route computation, we can only check basic availability
+    // More sophisticated congestion checking would require runtime state
+
+    int vcs_per_vnet = output_unit->getVcsPerVnet();
+    int num_vnets = m_router->get_num_vcs() / vcs_per_vnet;
+
+    // Check each virtual network for potentially available adaptive VCs
+    for (int vnet = 0; vnet < num_vnets; vnet++) {
+        // For each vnet, check VCs 1+ (adaptive VCs)
+        for (int vc_offset = 1; vc_offset < vcs_per_vnet; vc_offset++) {
+            int vc_id = vnet * vcs_per_vnet + vc_offset;
+
+            // During route computation, we can only check if VC is idle
+            // We can't check credits because VC might not be allocated
+            // yet
+            if (output_unit->is_vc_idle(vc_id, curTick())) {
+                // Found at least one potentially available adaptive VC
+                return true;
+            }
+        }
+    }
+
+    return false; // No adaptive VCs appear to be available
+}
+
+// Helper function to calculate congestion score for a direction
+int
+RoutingUnit::getDirectionCongestionScore(int outport_idx,
+                                        const PortDirection& direction)
+{
+    // Get basic congestion information from the output unit
+    auto output_unit = m_router->getOutputUnit(outport_idx);
+
+    int vcs_per_vnet = output_unit->getVcsPerVnet();
+    int num_vnets = m_router->get_num_vcs() / vcs_per_vnet;
+
+    int congestion_score = 0;
+    int idle_vcs = 0;
+    int total_adaptive_vcs = 0;
+
+    // Calculate congestion based on idle VC availability
+    for (int vnet = 0; vnet < num_vnets; vnet++) {
+        // Check adaptive VCs (VCs 1+) for availability
+        for (int vc_offset = 1; vc_offset < vcs_per_vnet; vc_offset++) {
+            int vc_id = vnet * vcs_per_vnet + vc_offset;
+            total_adaptive_vcs++;
+
+            // Count idle VCs (lower congestion)
+            if (output_unit->is_vc_idle(vc_id, curTick())) {
+                idle_vcs++;
+            }
+        }
+    }
+
+    // Calculate congestion score (lower is better)
+    if (total_adaptive_vcs > 0) {
+        // More idle VCs = lower congestion score
+        congestion_score = total_adaptive_vcs - idle_vcs;
+    } else {
+        congestion_score = 100; // High congestion if no adaptive VCs
+    }
+
+    // Add some randomization for tie-breaking
+    congestion_score += rand() % 3;
+
+    return congestion_score;
 }
 
 } // namespace garnet

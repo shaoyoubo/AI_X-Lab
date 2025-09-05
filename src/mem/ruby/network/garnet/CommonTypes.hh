@@ -52,7 +52,7 @@ enum flit_stage {I_, VA_, SA_, ST_, LT_, NUM_FLIT_STAGE_};
 enum link_type { EXT_IN_, EXT_OUT_, INT_, NUM_LINK_TYPES_ };
 enum RoutingAlgorithm
 {
-    TABLE_ = 0, XY_ = 1, CUSTOM_ = 2, TORUS3D_ = 3,
+    TABLE_ = 0, XY_ = 1, CUSTOM_ = 2, TORUS3D_ = 3, TORUS3D_ADAPTIVE_ = 4,
                         NUM_ROUTING_ALGORITHM_
 };
 
