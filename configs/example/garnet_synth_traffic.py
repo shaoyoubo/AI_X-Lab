@@ -117,6 +117,17 @@ parser.add_argument(
                         Set to -1 to inject randomly in all vnets.",
 )
 
+parser.add_argument(
+    "--adaptive-tie-breaking",
+    type=str,
+    default="x_first",
+    choices=["x_first", "uniform", "z_first"],
+    help="Tie-breaking strategy for adaptive routing when congestion scores are equal.\
+                        x_first: prefer X dimension (default), \
+                        uniform: randomly select among tied directions, \
+                        z_first: prefer Z dimension.",
+)
+
 #
 # Add the ruby specific and protocol specific options
 #

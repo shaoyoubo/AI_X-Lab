@@ -90,12 +90,23 @@ class RoutingUnit
 
     // Helper functions for adaptive routing
     bool checkAdaptiveVCAvailability(int outport_idx);
+    // New function for virtual-network-specific VC availability check
+    bool checkAdaptiveVCAvailabilityForVnet(int outport_idx, int vnet);
     int getDirectionCongestionScore(int outport_idx,
                                     const PortDirection& direction);
+    // New function for packet-type-specific congestion scoring
+    int getDirectionCongestionScoreForVnet(int outport_idx,
+                                          const PortDirection& direction,
+                                          int vnet);
 
     // Returns true if vnet is present in the vector
     // of vnets or if the vector supports all vnets.
     bool supportsVnet(int vnet, std::vector<int> sVnets);
+
+    // Apply tie-breaking strategy for adaptive routing
+    PortDirection applyTieBreakingStrategy(const std::vector<PortDirection>& tie_candidates,
+                                          const std::string& strategy,
+                                          const std::vector<PortDirection>& all_candidates);
 
 
   private:

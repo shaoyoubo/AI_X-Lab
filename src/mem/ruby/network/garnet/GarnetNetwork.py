@@ -54,6 +54,10 @@ class GarnetNetwork(RubyNetwork):
     garnet_deadlock_threshold = Param.UInt32(
         50000, "network-level deadlock threshold"
     )
+    adaptive_tie_breaking = Param.String(
+        "x_first",
+        "Tie-breaking strategy for adaptive routing: x_first, uniform, z_first",
+    )
 
 
 class GarnetNetworkInterface(ClockedObject):

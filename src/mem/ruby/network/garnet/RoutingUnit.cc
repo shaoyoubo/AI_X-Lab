@@ -34,6 +34,7 @@
 
 #include "base/cast.hh"
 #include "base/compiler.hh"
+#include "base/random.hh"
 #include "debug/RubyNetwork.hh"
 #include "mem/ruby/network/garnet/InputUnit.hh"
 #include "mem/ruby/network/garnet/OutputUnit.hh"
@@ -54,6 +55,10 @@ RoutingUnit::RoutingUnit(Router *router)
     m_router = router;
     m_routing_table.clear();
     m_weight_table.clear();
+
+    // Debug: Print when RoutingUnit is created
+    printf("[RoutingUnit Debug] RoutingUnit created for Router %d\n",
+           m_router->get_id());
 }
 
 void
@@ -451,12 +456,12 @@ RoutingUnit::outportComputeTorus3DAdaptive(RouteInfo route,
     // If not, fall back to escape VC (0) with deterministic routing
 
     PortDirection best_direction = "Unknown";
-    bool use_escape_vc = false;
 
     // First, try adaptive routing on available adaptive candidates
     // Check congestion and VC availability for adaptive directions
     int best_score = INT_MAX;
     bool found_adaptive_path = false;
+    std::vector<PortDirection> tie_candidates;  // Directions with same best score
 
     for (const auto& direction : adaptive_candidates) {
         if (m_outports_dirn2idx.find(direction) == m_outports_dirn2idx.end()) {
@@ -472,22 +477,35 @@ RoutingUnit::outportComputeTorus3DAdaptive(RouteInfo route,
         bool has_adaptive_vc = checkAdaptiveVCAvailability(outport_idx);
 
         if (has_adaptive_vc) {
-            // Calculate congestion score for this direction
-            int congestion_score = getDirectionCongestionScore(outport_idx,
-                                                               direction);
+            // Calculate congestion score for this direction and specific vnet
+            // This provides packet-type-specific congestion awareness
+            int congestion_score = getDirectionCongestionScoreForVnet(outport_idx,
+                                                                     direction,
+                                                                     route.vnet);
 
             if (congestion_score < best_score) {
                 best_score = congestion_score;
                 best_direction = direction;
                 found_adaptive_path = true;
+                tie_candidates.clear();
+                tie_candidates.push_back(direction);
+            } else if (congestion_score == best_score && found_adaptive_path) {
+                // Same score - add to tie candidates
+                tie_candidates.push_back(direction);
             }
         }
     }
 
+    // Handle tie-breaking if multiple directions have the same best score
+    if (found_adaptive_path && tie_candidates.size() > 1) {
+        std::string tie_breaking_strategy = garnet_net->getAdaptiveTieBreaking();
+        best_direction = applyTieBreakingStrategy(tie_candidates,
+                                                tie_breaking_strategy,
+                                                adaptive_candidates);
+    }
+
     // If no adaptive path found, use escape VC with deterministic routing
     if (!found_adaptive_path) {
-        use_escape_vc = true;
-
         // Dimension-Order Routing for escape VC
         if (x_dist > 0) {
             best_direction = x_forward ? "East" : "West";
@@ -509,7 +527,30 @@ RoutingUnit::outportComputeTorus3DAdaptive(RouteInfo route,
     return m_outports_dirn2idx[best_direction];
 }
 
-// Helper function to check if adaptive VCs are available for an outport
+// Helper function to check if adaptive VCs are available for a specific virtual network
+bool
+RoutingUnit::checkAdaptiveVCAvailabilityForVnet(int outport_idx, int vnet)
+{
+    // Access the router's output unit for this outport
+    auto output_unit = m_router->getOutputUnit(outport_idx);
+
+    int vcs_per_vnet = output_unit->getVcsPerVnet();
+
+    // Check only adaptive VCs (VC 1+) for the specific virtual network
+    for (int vc_offset = 1; vc_offset < vcs_per_vnet; vc_offset++) {
+        int vc_id = vnet * vcs_per_vnet + vc_offset;
+
+        // During route computation, check if VC is idle for this specific vnet
+        if (output_unit->is_vc_idle(vc_id, curTick())) {
+            // Found at least one available adaptive VC for this vnet
+            return true;
+        }
+    }
+
+    return false; // No adaptive VCs available for this specific vnet
+}
+
+// Helper function to check if adaptive VCs are available for an outport (legacy)
 bool
 RoutingUnit::checkAdaptiveVCAvailability(int outport_idx)
 {
@@ -522,6 +563,14 @@ RoutingUnit::checkAdaptiveVCAvailability(int outport_idx)
 
     int vcs_per_vnet = output_unit->getVcsPerVnet();
     int num_vnets = m_router->get_num_vcs() / vcs_per_vnet;
+
+    // Debug: Print VC configuration (only print once per router)
+    static bool printed_config = false;
+    if (!printed_config) {
+        printf("[RoutingUnit Debug] Router %d: num_vnets=%d, vcs_per_vnet=%d, total_vcs=%d\n",
+               m_router->get_id(), num_vnets, vcs_per_vnet, m_router->get_num_vcs());
+        printed_config = true;
+    }
 
     // Check each virtual network for potentially available adaptive VCs
     for (int vnet = 0; vnet < num_vnets; vnet++) {
@@ -542,7 +591,37 @@ RoutingUnit::checkAdaptiveVCAvailability(int outport_idx)
     return false; // No adaptive VCs appear to be available
 }
 
-// Helper function to calculate congestion score for a direction
+// Helper function to calculate congestion score for a specific virtual network
+int
+RoutingUnit::getDirectionCongestionScoreForVnet(int outport_idx,
+                                               const PortDirection& direction,
+                                               int vnet)
+{
+    // Get basic congestion information from the output unit
+    auto output_unit = m_router->getOutputUnit(outport_idx);
+
+    int vcs_per_vnet = output_unit->getVcsPerVnet();
+    int idle_adaptive_vcs = 0;
+
+    // Count idle adaptive VCs (VCs 1+) for the specific virtual network
+    for (int vc_offset = 1; vc_offset < vcs_per_vnet; vc_offset++) {
+        int vc_id = vnet * vcs_per_vnet + vc_offset;
+
+        // Check if VC is idle for this specific virtual network
+        if (output_unit->is_vc_idle(vc_id, curTick())) {
+            idle_adaptive_vcs++;
+        }
+    }
+
+    // Simple congestion score: total adaptive VCs minus idle VCs
+    // Lower score means less congestion (more idle VCs available)
+    int total_adaptive_vcs = vcs_per_vnet - 1; // Exclude escape VC (VC 0)
+    int congestion_score = total_adaptive_vcs - idle_adaptive_vcs;
+
+    return congestion_score;
+}
+
+// Legacy function for backward compatibility - now uses simple aggregate scoring
 int
 RoutingUnit::getDirectionCongestionScore(int outport_idx,
                                         const PortDirection& direction)
@@ -553,36 +632,64 @@ RoutingUnit::getDirectionCongestionScore(int outport_idx,
     int vcs_per_vnet = output_unit->getVcsPerVnet();
     int num_vnets = m_router->get_num_vcs() / vcs_per_vnet;
 
-    int congestion_score = 0;
-    int idle_vcs = 0;
-    int total_adaptive_vcs = 0;
+    // Calculate simple aggregate congestion across all virtual networks
+    int total_congestion = 0;
 
-    // Calculate congestion based on idle VC availability
     for (int vnet = 0; vnet < num_vnets; vnet++) {
-        // Check adaptive VCs (VCs 1+) for availability
-        for (int vc_offset = 1; vc_offset < vcs_per_vnet; vc_offset++) {
-            int vc_id = vnet * vcs_per_vnet + vc_offset;
-            total_adaptive_vcs++;
+        total_congestion += getDirectionCongestionScoreForVnet(outport_idx, direction, vnet);
+    }
 
-            // Count idle VCs (lower congestion)
-            if (output_unit->is_vc_idle(vc_id, curTick())) {
-                idle_vcs++;
+    // Return average congestion across all vnets
+    return (num_vnets > 0) ? (total_congestion / num_vnets) : 0;
+}
+
+// Apply tie-breaking strategy when multiple directions have the same congestion score
+PortDirection
+RoutingUnit::applyTieBreakingStrategy(const std::vector<PortDirection>& tie_candidates,
+                                     const std::string& strategy,
+                                     const std::vector<PortDirection>& all_candidates)
+{
+    if (tie_candidates.empty()) {
+        panic("Empty tie candidates in applyTieBreakingStrategy");
+    }
+
+    if (tie_candidates.size() == 1) {
+        return tie_candidates[0];
+    }
+
+    if (strategy == "x_first") {
+        // Prefer X directions (East/West), then Y (North/South), then Z (Up/Down)
+        for (const auto& direction : {"East", "West", "North", "South", "Up", "Down"}) {
+            for (const auto& candidate : tie_candidates) {
+                if (candidate == direction) {
+                    return candidate;
+                }
             }
         }
-    }
+        return tie_candidates[0];  // Fallback
 
-    // Calculate congestion score (lower is better)
-    if (total_adaptive_vcs > 0) {
-        // More idle VCs = lower congestion score
-        congestion_score = total_adaptive_vcs - idle_vcs;
+    } else if (strategy == "z_first") {
+        // Prefer Z directions (Up/Down), then Y (North/South), then X (East/West)
+        for (const auto& direction : {"Up", "Down", "North", "South", "East", "West"}) {
+            for (const auto& candidate : tie_candidates) {
+                if (candidate == direction) {
+                    return candidate;
+                }
+            }
+        }
+        return tie_candidates[0];  // Fallback
+
+    } else if (strategy == "uniform") {
+        // Uniform random selection among tie candidates
+        int random_idx = random_mt.random(0, static_cast<int>(tie_candidates.size()) - 1);
+        return tie_candidates[random_idx];
+
     } else {
-        congestion_score = 100; // High congestion if no adaptive VCs
+        // Unknown strategy - default to x_first
+        DPRINTF(RubyNetwork, "Unknown tie-breaking strategy: %s, using x_first\n",
+                strategy.c_str());
+        return applyTieBreakingStrategy(tie_candidates, "x_first", all_candidates);
     }
-
-    // Add some randomization for tie-breaking
-    congestion_score += rand() % 3;
-
-    return congestion_score;
 }
 
 } // namespace garnet

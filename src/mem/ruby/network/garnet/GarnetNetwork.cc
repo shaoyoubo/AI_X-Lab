@@ -74,6 +74,7 @@ GarnetNetwork::GarnetNetwork(const Params &p)
     m_buffers_per_ctrl_vc = p.buffers_per_ctrl_vc;
     m_routing_algorithm = p.routing_algorithm;
     m_next_packet_id = 0;
+    m_adaptive_tie_breaking = p.adaptive_tie_breaking;
 
     m_enable_fault_model = p.enable_fault_model;
     if (m_enable_fault_model)
