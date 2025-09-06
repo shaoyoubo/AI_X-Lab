@@ -31,6 +31,7 @@
 #include "mem/ruby/network/garnet/RoutingUnit.hh"
 
 #include <cmath>
+#include <cfloat>
 
 #include "base/cast.hh"
 #include "base/compiler.hh"
@@ -459,7 +460,7 @@ RoutingUnit::outportComputeTorus3DAdaptive(RouteInfo route,
 
     // First, try adaptive routing on available adaptive candidates
     // Check congestion and VC availability for adaptive directions
-    int best_score = INT_MAX;
+    float best_score = FLT_MAX;
     bool found_adaptive_path = false;
     std::vector<PortDirection> tie_candidates;  // Directions with same best score
 
@@ -477,19 +478,19 @@ RoutingUnit::outportComputeTorus3DAdaptive(RouteInfo route,
         bool has_adaptive_vc = checkAdaptiveVCAvailability(outport_idx);
 
         if (has_adaptive_vc) {
-            // Calculate congestion score for this direction and specific vnet
-            // This provides packet-type-specific congestion awareness
-            int congestion_score = getDirectionCongestionScoreForVnet(outport_idx,
-                                                                     direction,
-                                                                     route.vnet);
+            // Calculate combined congestion + distance score for this direction
+            float combined_score = calculateCombinedScore(outport_idx,
+                                                         direction,
+                                                         route.vnet,
+                                                         route.dest_ni);
 
-            if (congestion_score < best_score) {
-                best_score = congestion_score;
+            if (combined_score < best_score) {
+                best_score = combined_score;
                 best_direction = direction;
                 found_adaptive_path = true;
                 tie_candidates.clear();
                 tie_candidates.push_back(direction);
-            } else if (congestion_score == best_score && found_adaptive_path) {
+            } else if (abs(combined_score - best_score) < 0.001f && found_adaptive_path) {
                 // Same score - add to tie candidates
                 tie_candidates.push_back(direction);
             }
@@ -628,6 +629,103 @@ RoutingUnit::getDirectionCongestionScoreForVnet(int outport_idx,
     int congestion_score = total_adaptive_vcs - idle_adaptive_vcs;
 
     return congestion_score;
+}
+
+// Calculate remaining hops after taking a specific direction
+int
+RoutingUnit::calculateRemainingHops(const PortDirection& direction, int dest_ni)
+{
+    GarnetNetwork* garnet_net = safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
+    
+    int dim_x = garnet_net->getTorusX();
+    int dim_y = garnet_net->getTorusY();
+    int dim_z = garnet_net->getTorusZ();
+    
+    // Get current router coordinates
+    int current_router_id = m_router->get_id();
+    int curr_z = current_router_id / (dim_x * dim_y);
+    int curr_remainder = current_router_id % (dim_x * dim_y);
+    int curr_y = curr_remainder / dim_x;
+    int curr_x = curr_remainder % dim_x;
+    
+    // Get destination coordinates
+    int dest_z = dest_ni / (dim_x * dim_y);
+    int dest_remainder = dest_ni % (dim_x * dim_y);
+    int dest_y = dest_remainder / dim_x;
+    int dest_x = dest_remainder % dim_x;
+    
+    // Simulate moving in the chosen direction
+    int next_x = curr_x, next_y = curr_y, next_z = curr_z;
+    
+    if (direction == "East") {
+        next_x = (curr_x + 1) % dim_x;
+    } else if (direction == "West") {
+        next_x = (curr_x - 1 + dim_x) % dim_x;
+    } else if (direction == "North") {
+        next_y = (curr_y + 1) % dim_y;
+    } else if (direction == "South") {
+        next_y = (curr_y - 1 + dim_y) % dim_y;
+    } else if (direction == "Up") {
+        next_z = (curr_z + 1) % dim_z;
+    } else if (direction == "Down") {
+        next_z = (curr_z - 1 + dim_z) % dim_z;
+    }
+    
+    // Calculate distance in each dimension considering torus wraparound
+    auto torus_distance = [](int curr, int dest, int dim_size) -> int {
+        int forward_dist = (dest - curr + dim_size) % dim_size;
+        int backward_dist = (curr - dest + dim_size) % dim_size;
+        return std::min(forward_dist, backward_dist);
+    };
+    
+    int x_dist = torus_distance(next_x, dest_x, dim_x);
+    int y_dist = torus_distance(next_y, dest_y, dim_y);
+    int z_dist = torus_distance(next_z, dest_z, dim_z);
+                         
+    return x_dist + y_dist + z_dist;
+}
+
+// Calculate normalized distance score (0.0-1.0, lower is better)
+float
+RoutingUnit::calculateDistanceScore(const PortDirection& direction, int dest_ni)
+{
+    int remaining_hops = calculateRemainingHops(direction, dest_ni);
+    GarnetNetwork* garnet_net = safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
+    
+    int dim_x = garnet_net->getTorusX();
+    int dim_y = garnet_net->getTorusY();
+    int dim_z = garnet_net->getTorusZ();
+    
+    // Maximum possible hops in 3D torus (worst case: half the perimeter in each dimension)
+    int max_hops = (dim_x + dim_y + dim_z) / 2;
+    
+    return (float)remaining_hops / max_hops;
+}
+
+// Calculate combined congestion + distance score
+float
+RoutingUnit::calculateCombinedScore(int outport_idx, const PortDirection& direction, 
+                                   int vnet, int dest_ni)
+{
+    GarnetNetwork* garnet_net = safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
+    float congestion_weight = garnet_net->getCongestionWeight();
+    float distance_weight = 1.0f - congestion_weight;
+    
+    // Get normalized congestion score (0.0-1.0)
+    int congestion_raw = getDirectionCongestionScoreForVnet(outport_idx, direction, vnet);
+    auto output_unit = m_router->getOutputUnit(outport_idx);
+    int vcs_per_vnet = output_unit->getVcsPerVnet();
+    uint32_t escape_vcs = garnet_net->getEscapeVCs();
+    int total_adaptive_vcs = vcs_per_vnet - escape_vcs;
+    
+    float congestion_score = (total_adaptive_vcs > 0) ? 
+                            (float)congestion_raw / total_adaptive_vcs : 0.0f;
+    
+    // Get normalized distance score (0.0-1.0)
+    float distance_score = calculateDistanceScore(direction, dest_ni);
+    
+    // Combined score (lower is better)
+    return congestion_weight * congestion_score + distance_weight * distance_score;
 }
 
 // Legacy function for backward compatibility - now uses simple aggregate scoring

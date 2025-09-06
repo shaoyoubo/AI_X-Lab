@@ -136,6 +136,14 @@ parser.add_argument(
                         Must be <= vcs-per-vnet. Default is 1.",
 )
 
+parser.add_argument(
+    "--congestion-weight",
+    type=float,
+    default=1.0,
+    help="Weight for congestion factor in adaptive routing (0.0-1.0). \
+                        Distance weight = 1.0 - congestion_weight. Default is 0.7.",
+)
+
 #
 # Add the ruby specific and protocol specific options
 #

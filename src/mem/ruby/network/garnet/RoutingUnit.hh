@@ -96,10 +96,14 @@ class RoutingUnit
                                     const PortDirection& direction);
     // New function for packet-type-specific congestion scoring
     int getDirectionCongestionScoreForVnet(int outport_idx,
-                                          const PortDirection& direction,
-                                          int vnet);
-
-    // Returns true if vnet is present in the vector
+                                           const PortDirection& direction,
+                                           int vnet);
+                                           
+    // Distance-aware routing functions
+    int calculateRemainingHops(const PortDirection& direction, int dest_ni);
+    float calculateDistanceScore(const PortDirection& direction, int dest_ni);
+    float calculateCombinedScore(int outport_idx, const PortDirection& direction, 
+                                int vnet, int dest_ni);    // Returns true if vnet is present in the vector
     // of vnets or if the vector supports all vnets.
     bool supportsVnet(int vnet, std::vector<int> sVnets);
 
