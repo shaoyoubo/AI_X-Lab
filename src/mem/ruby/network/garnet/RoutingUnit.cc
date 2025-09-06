@@ -369,7 +369,7 @@ RoutingUnit::outportComputeTorus3D(RouteInfo route,
     return m_outports_dirn2idx[outport_dirn];
 }
 
-// 3D Torus Adaptive Routing with Duato-style Escape VC
+// 3D Torus Adaptive Routing with Duato-style Escape VCs
 // Uses escape VCs for deterministic routing and adaptive VCs for
 // congestion-aware routing
 int
@@ -449,11 +449,11 @@ RoutingUnit::outportComputeTorus3DAdaptive(RouteInfo route,
     }
 
     // Duato-style escape VC mechanism:
-    // VC 0 is reserved as escape VC for deterministic dimension-order routing
-    // VCs 1+ are adaptive VCs for congestion-aware routing
+    // VCs 0 to (escape_vcs-1) are reserved as escape VCs for deterministic dimension-order routing
+    // VCs escape_vcs+ are adaptive VCs for congestion-aware routing
 
-    // For adaptive routing, check if adaptive VCs (1+) are available
-    // If not, fall back to escape VC (0) with deterministic routing
+    // For adaptive routing, check if adaptive VCs (escape_vcs+) are available
+    // If not, fall back to escape VCs (0 to escape_vcs-1) with deterministic routing
 
     PortDirection best_direction = "Unknown";
 
@@ -504,9 +504,9 @@ RoutingUnit::outportComputeTorus3DAdaptive(RouteInfo route,
                                                 adaptive_candidates);
     }
 
-    // If no adaptive path found, use escape VC with deterministic routing
+    // If no adaptive path found, use escape VCs with deterministic routing
     if (!found_adaptive_path) {
-        // Dimension-Order Routing for escape VC
+        // Dimension-Order Routing for escape VCs
         if (x_dist > 0) {
             best_direction = x_forward ? "East" : "West";
         } else if (y_dist > 0) {
@@ -536,8 +536,11 @@ RoutingUnit::checkAdaptiveVCAvailabilityForVnet(int outport_idx, int vnet)
 
     int vcs_per_vnet = output_unit->getVcsPerVnet();
 
-    // Check only adaptive VCs (VC 1+) for the specific virtual network
-    for (int vc_offset = 1; vc_offset < vcs_per_vnet; vc_offset++) {
+    // Check only adaptive VCs (escape_vcs+) for the specific virtual network
+    GarnetNetwork* garnet_net = safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
+    uint32_t escape_vcs = garnet_net->getEscapeVCs();
+    
+    for (int vc_offset = escape_vcs; vc_offset < vcs_per_vnet; vc_offset++) {
         int vc_id = vnet * vcs_per_vnet + vc_offset;
 
         // During route computation, check if VC is idle for this specific vnet
@@ -573,9 +576,12 @@ RoutingUnit::checkAdaptiveVCAvailability(int outport_idx)
     }
 
     // Check each virtual network for potentially available adaptive VCs
+    GarnetNetwork* garnet_net = safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
+    uint32_t escape_vcs = garnet_net->getEscapeVCs();
+    
     for (int vnet = 0; vnet < num_vnets; vnet++) {
-        // For each vnet, check VCs 1+ (adaptive VCs)
-        for (int vc_offset = 1; vc_offset < vcs_per_vnet; vc_offset++) {
+        // For each vnet, check escape_vcs+ (adaptive VCs)
+        for (int vc_offset = escape_vcs; vc_offset < vcs_per_vnet; vc_offset++) {
             int vc_id = vnet * vcs_per_vnet + vc_offset;
 
             // During route computation, we can only check if VC is idle
@@ -602,9 +608,12 @@ RoutingUnit::getDirectionCongestionScoreForVnet(int outport_idx,
 
     int vcs_per_vnet = output_unit->getVcsPerVnet();
     int idle_adaptive_vcs = 0;
+    
+    GarnetNetwork* garnet_net = safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
+    uint32_t escape_vcs = garnet_net->getEscapeVCs();
 
-    // Count idle adaptive VCs (VCs 1+) for the specific virtual network
-    for (int vc_offset = 1; vc_offset < vcs_per_vnet; vc_offset++) {
+    // Count idle adaptive VCs (escape_vcs+) for the specific virtual network
+    for (int vc_offset = escape_vcs; vc_offset < vcs_per_vnet; vc_offset++) {
         int vc_id = vnet * vcs_per_vnet + vc_offset;
 
         // Check if VC is idle for this specific virtual network
@@ -615,7 +624,7 @@ RoutingUnit::getDirectionCongestionScoreForVnet(int outport_idx,
 
     // Simple congestion score: total adaptive VCs minus idle VCs
     // Lower score means less congestion (more idle VCs available)
-    int total_adaptive_vcs = vcs_per_vnet - 1; // Exclude escape VC (VC 0)
+    int total_adaptive_vcs = vcs_per_vnet - escape_vcs; // Exclude escape VCs
     int congestion_score = total_adaptive_vcs - idle_adaptive_vcs;
 
     return congestion_score;

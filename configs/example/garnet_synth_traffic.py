@@ -128,6 +128,14 @@ parser.add_argument(
                         z_first: prefer Z dimension.",
 )
 
+parser.add_argument(
+    "--escape-vcs",
+    type=int,
+    default=1,
+    help="Number of escape VCs per virtual network for adaptive routing algorithm 4 (TORUS3D_ADAPTIVE).\
+                        Must be <= vcs-per-vnet. Default is 1.",
+)
+
 #
 # Add the ruby specific and protocol specific options
 #

@@ -196,6 +196,10 @@ def init_network(options, network, InterfaceClass):
         # Set adaptive tie-breaking strategy if available
         if hasattr(options, "adaptive_tie_breaking"):
             network.adaptive_tie_breaking = options.adaptive_tie_breaking
+            
+        # Set escape VCs for adaptive routing if available
+        if hasattr(options, "escape_vcs"):
+            network.escape_vcs = options.escape_vcs
 
         # Create Bridges and connect them to the corresponding links
         for intLink in network.int_links:

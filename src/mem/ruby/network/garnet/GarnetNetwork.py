@@ -58,6 +58,9 @@ class GarnetNetwork(RubyNetwork):
         "x_first",
         "Tie-breaking strategy for adaptive routing: x_first, uniform, z_first",
     )
+    escape_vcs = Param.UInt32(
+        1, "number of escape virtual channels per virtual network"
+    )
 
 
 class GarnetNetworkInterface(ClockedObject):

@@ -86,6 +86,7 @@ class GarnetNetwork : public Network
     uint32_t getBuffersPerCtrlVC() { return m_buffers_per_ctrl_vc; }
     int getRoutingAlgorithm() const { return m_routing_algorithm; }
     std::string getAdaptiveTieBreaking() const { return m_adaptive_tie_breaking; }
+    uint32_t getEscapeVCs() const { return m_escape_vcs; }
 
     bool isFaultModelEnabled() const { return m_enable_fault_model; }
     FaultModel* fault_model;
@@ -177,6 +178,7 @@ class GarnetNetwork : public Network
     int m_routing_algorithm;
     bool m_enable_fault_model;
     std::string m_adaptive_tie_breaking;
+    uint32_t m_escape_vcs;
 
     // Statistical variables
     statistics::Vector m_packets_received;
