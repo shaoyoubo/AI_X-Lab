@@ -61,8 +61,8 @@ class GarnetNetwork(RubyNetwork):
     escape_vcs = Param.UInt32(
         1, "number of escape virtual channels per virtual network"
     )
-    congestion_weight = Param.Float(
-        1.0, "weight for congestion factor in distance-aware routing (0.0-1.0)"
+    distance_coefficient = Param.Float(
+        0.0, "distance preference coefficient: negative=prefer short, positive=prefer long, zero=pure congestion"
     )
 
 

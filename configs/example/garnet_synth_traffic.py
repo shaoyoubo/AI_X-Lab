@@ -137,11 +137,13 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--congestion-weight",
+    "--distance-coefficient",
     type=float,
-    default=1.0,
-    help="Weight for congestion factor in adaptive routing (0.0-1.0). \
-                        Distance weight = 1.0 - congestion_weight. Default is 0.7.",
+    default=0.0,
+    help="Distance preference coefficient for adaptive routing. \
+                        Negative: prefer short remaining distances (conservative, DOR-like). \
+                        Positive: prefer long remaining distances (load balancing). \
+                        Zero: pure congestion-based routing. Range: -1.0 to 1.0.",
 )
 
 #

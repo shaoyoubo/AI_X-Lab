@@ -201,9 +201,9 @@ def init_network(options, network, InterfaceClass):
         if hasattr(options, "escape_vcs"):
             network.escape_vcs = options.escape_vcs
             
-        # Set congestion weight for distance-aware routing if available  
-        if hasattr(options, "congestion_weight"):
-            network.congestion_weight = options.congestion_weight
+        # Set distance coefficient for distance-aware routing if available  
+        if hasattr(options, "distance_coefficient"):
+            network.distance_coefficient = options.distance_coefficient
 
         # Create Bridges and connect them to the corresponding links
         for intLink in network.int_links:

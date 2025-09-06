@@ -685,21 +685,73 @@ RoutingUnit::calculateRemainingHops(const PortDirection& direction, int dest_ni)
     return x_dist + y_dist + z_dist;
 }
 
-// Calculate normalized distance score (0.0-1.0, lower is better)
+// Calculate prefer-short score: higher values mean shorter remaining distances
 float
 RoutingUnit::calculateDistanceScore(const PortDirection& direction, int dest_ni)
 {
-    int remaining_hops = calculateRemainingHops(direction, dest_ni);
     GarnetNetwork* garnet_net = safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
     
     int dim_x = garnet_net->getTorusX();
     int dim_y = garnet_net->getTorusY();
     int dim_z = garnet_net->getTorusZ();
     
-    // Maximum possible hops in 3D torus (worst case: half the perimeter in each dimension)
-    int max_hops = (dim_x + dim_y + dim_z) / 2;
+    // Get current router coordinates
+    int current_router_id = m_router->get_id();
+    int curr_z = current_router_id / (dim_x * dim_y);
+    int curr_remainder = current_router_id % (dim_x * dim_y);
+    int curr_y = curr_remainder / dim_x;
+    int curr_x = curr_remainder % dim_x;
     
-    return (float)remaining_hops / max_hops;
+    // Get destination coordinates  
+    int dest_z = dest_ni / (dim_x * dim_y);
+    int dest_remainder = dest_ni % (dim_x * dim_y);
+    int dest_y = dest_remainder / dim_x;
+    int dest_x = dest_remainder % dim_x;
+    
+    // Calculate remaining distance in each dimension
+    auto torus_distance = [](int curr, int dest, int dim_size) -> int {
+        int forward_dist = (dest - curr + dim_size) % dim_size;
+        int backward_dist = (curr - dest + dim_size) % dim_size;
+        return std::min(forward_dist, backward_dist);
+    };
+    
+    int x_dist = torus_distance(curr_x, dest_x, dim_x);
+    int y_dist = torus_distance(curr_y, dest_y, dim_y);
+    int z_dist = torus_distance(curr_z, dest_z, dim_z);
+    
+    // Calculate prefer-short score for the chosen direction
+    // Higher score = prefer this direction when coefficient > 0 (prefer short)
+    // Lower score = prefer this direction when coefficient < 0 (prefer long)
+    float prefer_short_score = 0.0f;
+    int total_remaining = x_dist + y_dist + z_dist;
+    
+    if (total_remaining == 0) {
+        return 0.0f;  // Should not happen in routing
+    }
+    
+    if (direction == "East" || direction == "West") {
+        if (x_dist > 0) {
+            // Score inversely proportional to remaining distance in this dimension
+            // More remaining distance = lower score = prefer when coefficient < 0
+            prefer_short_score = (float)(total_remaining - x_dist) / total_remaining;
+        } else {
+            prefer_short_score = 0.0f;  // Invalid direction
+        }
+    } else if (direction == "North" || direction == "South") {
+        if (y_dist > 0) {
+            prefer_short_score = (float)(total_remaining - y_dist) / total_remaining;
+        } else {
+            prefer_short_score = 0.0f;  // Invalid direction
+        }
+    } else if (direction == "Up" || direction == "Down") {
+        if (z_dist > 0) {
+            prefer_short_score = (float)(total_remaining - z_dist) / total_remaining;
+        } else {
+            prefer_short_score = 0.0f;  // Invalid direction
+        }
+    }
+    
+    return prefer_short_score;
 }
 
 // Calculate combined congestion + distance score
@@ -708,8 +760,7 @@ RoutingUnit::calculateCombinedScore(int outport_idx, const PortDirection& direct
                                    int vnet, int dest_ni)
 {
     GarnetNetwork* garnet_net = safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
-    float congestion_weight = garnet_net->getCongestionWeight();
-    float distance_weight = 1.0f - congestion_weight;
+    float distance_coefficient = garnet_net->getDistanceCoefficient();
     
     // Get normalized congestion score (0.0-1.0)
     int congestion_raw = getDirectionCongestionScoreForVnet(outport_idx, direction, vnet);
@@ -721,11 +772,17 @@ RoutingUnit::calculateCombinedScore(int outport_idx, const PortDirection& direct
     float congestion_score = (total_adaptive_vcs > 0) ? 
                             (float)congestion_raw / total_adaptive_vcs : 0.0f;
     
-    // Get normalized distance score (0.0-1.0)
-    float distance_score = calculateDistanceScore(direction, dest_ni);
+    // Get prefer-short score (0.0-1.0, higher = shorter remaining distance in this dimension)
+    float prefer_short_score = calculateDistanceScore(direction, dest_ni);
     
-    // Combined score (lower is better)
-    return congestion_weight * congestion_score + distance_weight * distance_score;
+    // Combined score: congestion + coefficient * prefer_short
+    // Lower final score = better choice
+    // Negative coefficient: prefer short remaining distances (conservative, DOR-like)
+    // Positive coefficient: prefer long remaining distances (load balancing)
+    // Zero coefficient: pure congestion-based routing
+    float combined_score = congestion_score + distance_coefficient * prefer_short_score;
+    
+    return combined_score;
 }
 
 // Legacy function for backward compatibility - now uses simple aggregate scoring
