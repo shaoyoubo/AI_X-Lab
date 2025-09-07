@@ -176,7 +176,7 @@ RoutingUnit::addOutDirection(PortDirection outport_dirn, int outport_idx)
 
 int
 RoutingUnit::outportCompute(RouteInfo route, int inport,
-                            PortDirection inport_dirn)
+                            PortDirection inport_dirn, flit* t_flit)
 {
     int outport = -1;
 
@@ -205,7 +205,7 @@ RoutingUnit::outportCompute(RouteInfo route, int inport,
         case TORUS3D_: outport =
             outportComputeTorus3D(route, inport, inport_dirn); break;
         case TORUS3D_ADAPTIVE_: outport =
-            outportComputeTorus3DAdaptive(route, inport, inport_dirn); break;
+            outportComputeTorus3DAdaptive(route, inport, inport_dirn, t_flit); break;
         default: outport =
             lookupRoutingTable(route.vnet, route.net_dest); break;
     }
@@ -376,7 +376,8 @@ RoutingUnit::outportComputeTorus3D(RouteInfo route,
 int
 RoutingUnit::outportComputeTorus3DAdaptive(RouteInfo route,
                                           int inport,
-                                          PortDirection inport_dirn)
+                                          PortDirection inport_dirn,
+                                            flit* t_flit)
 {
     GarnetNetwork* garnet_net =
         safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
@@ -455,7 +456,21 @@ RoutingUnit::outportComputeTorus3DAdaptive(RouteInfo route,
 
     // For adaptive routing, check if adaptive VCs (escape_vcs+) are available
     // If not, fall back to escape VCs (0 to escape_vcs-1) with deterministic routing
-
+    if (t_flit->get_use_escape_vc()) {
+        // Currently using escape VC - must continue using escape VCs
+        // Use deterministic dimension-order routing
+        PortDirection escape_direction = computeEscapeVCDirection(my_x, my_y, my_z, 
+                                                                 dest_x, dest_y, dest_z, 
+                                                                 dim_x, dim_y, dim_z);
+        // Validate the selected direction
+        if (m_outports_dirn2idx.find(escape_direction) ==
+            m_outports_dirn2idx.end()) {
+            panic("3D Torus adaptive routing: escape direction %s not found "
+                  "in router %d",
+                  escape_direction.c_str(), m_router->get_id());
+        }
+        return m_outports_dirn2idx[escape_direction];
+    }
     PortDirection best_direction = "Unknown";
 
     // First, try adaptive routing on available adaptive candidates
@@ -475,7 +490,7 @@ RoutingUnit::outportComputeTorus3DAdaptive(RouteInfo route,
         // Simple heuristic: assume adaptive VCs are available with some
         // probability. In a real implementation, this would check actual VC
         // states
-        bool has_adaptive_vc = checkAdaptiveVCAvailability(outport_idx);
+        bool has_adaptive_vc = checkAdaptiveVCAvailabilityForVnet(outport_idx, route.vnet);
 
         if (has_adaptive_vc) {
             // Calculate combined congestion + distance score for this direction
@@ -496,25 +511,26 @@ RoutingUnit::outportComputeTorus3DAdaptive(RouteInfo route,
             }
         }
     }
-
+    // t_flit->set_use_escape_vc(true);
     // Handle tie-breaking if multiple directions have the same best score
     if (found_adaptive_path && tie_candidates.size() > 1) {
         std::string tie_breaking_strategy = garnet_net->getAdaptiveTieBreaking();
         best_direction = applyTieBreakingStrategy(tie_candidates,
                                                 tie_breaking_strategy,
                                                 adaptive_candidates);
+    } else if (found_adaptive_path && tie_candidates.size() == 1) {
+        // Single adaptive path found
+        best_direction = tie_candidates[0];
     }
 
     // If no adaptive path found, use escape VCs with deterministic routing
     if (!found_adaptive_path) {
-        // Dimension-Order Routing for escape VCs
-        if (x_dist > 0) {
-            best_direction = x_forward ? "East" : "West";
-        } else if (y_dist > 0) {
-            best_direction = y_forward ? "North" : "South";
-        } else if (z_dist > 0) {
-            best_direction = z_forward ? "Up" : "Down";
-        }
+    // if (true){
+        // Use mesh-style escape VC routing (no wrap-around edges)
+        best_direction = computeEscapeVCDirection(my_x, my_y, my_z, 
+                                                 dest_x, dest_y, dest_z, 
+                                                 dim_x, dim_y, dim_z);
+        t_flit->set_use_escape_vc(true); // Using escape VC
     }
 
     // Validate the selected direction
@@ -524,7 +540,6 @@ RoutingUnit::outportComputeTorus3DAdaptive(RouteInfo route,
               "in router %d",
               best_direction.c_str(), m_router->get_id());
     }
-
     return m_outports_dirn2idx[best_direction];
 }
 
@@ -555,48 +570,48 @@ RoutingUnit::checkAdaptiveVCAvailabilityForVnet(int outport_idx, int vnet)
 }
 
 // Helper function to check if adaptive VCs are available for an outport (legacy)
-bool
-RoutingUnit::checkAdaptiveVCAvailability(int outport_idx)
-{
-    // Access the router's output unit for this outport
-    auto output_unit = m_router->getOutputUnit(outport_idx);
+// bool
+// RoutingUnit::checkAdaptiveVCAvailability(int outport_idx)
+// {
+//     // Access the router's output unit for this outport
+//     auto output_unit = m_router->getOutputUnit(outport_idx);
 
-    // Check if adaptive VCs (VC 1 and higher) are available
-    // During route computation, we can only check basic availability
-    // More sophisticated congestion checking would require runtime state
+//     // Check if adaptive VCs (VC 1 and higher) are available
+//     // During route computation, we can only check basic availability
+//     // More sophisticated congestion checking would require runtime state
 
-    int vcs_per_vnet = output_unit->getVcsPerVnet();
-    int num_vnets = m_router->get_num_vcs() / vcs_per_vnet;
+//     int vcs_per_vnet = output_unit->getVcsPerVnet();
+//     int num_vnets = m_router->get_num_vcs() / vcs_per_vnet;
 
-    // Debug: Print VC configuration (only print once per router)
-    static bool printed_config = false;
-    if (!printed_config) {
-        printf("[RoutingUnit Debug] Router %d: num_vnets=%d, vcs_per_vnet=%d, total_vcs=%d\n",
-               m_router->get_id(), num_vnets, vcs_per_vnet, m_router->get_num_vcs());
-        printed_config = true;
-    }
+//     // Debug: Print VC configuration (only print once per router)
+//     static bool printed_config = false;
+//     if (!printed_config) {
+//         printf("[RoutingUnit Debug] Router %d: num_vnets=%d, vcs_per_vnet=%d, total_vcs=%d\n",
+//                m_router->get_id(), num_vnets, vcs_per_vnet, m_router->get_num_vcs());
+//         printed_config = true;
+//     }
 
-    // Check each virtual network for potentially available adaptive VCs
-    GarnetNetwork* garnet_net = safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
-    uint32_t escape_vcs = garnet_net->getEscapeVCs();
+//     // Check each virtual network for potentially available adaptive VCs
+//     GarnetNetwork* garnet_net = safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
+//     uint32_t escape_vcs = garnet_net->getEscapeVCs();
     
-    for (int vnet = 0; vnet < num_vnets; vnet++) {
-        // For each vnet, check escape_vcs+ (adaptive VCs)
-        for (int vc_offset = escape_vcs; vc_offset < vcs_per_vnet; vc_offset++) {
-            int vc_id = vnet * vcs_per_vnet + vc_offset;
+//     for (int vnet = 0; vnet < num_vnets; vnet++) {
+//         // For each vnet, check escape_vcs+ (adaptive VCs)
+//         for (int vc_offset = escape_vcs; vc_offset < vcs_per_vnet; vc_offset++) {
+//             int vc_id = vnet * vcs_per_vnet + vc_offset;
 
-            // During route computation, we can only check if VC is idle
-            // We can't check credits because VC might not be allocated
-            // yet
-            if (output_unit->is_vc_idle(vc_id, curTick())) {
-                // Found at least one potentially available adaptive VC
-                return true;
-            }
-        }
-    }
+//             // During route computation, we can only check if VC is idle
+//             // We can't check credits because VC might not be allocated
+//             // yet
+//             if (output_unit->is_vc_idle(vc_id, curTick())) {
+//                 // Found at least one potentially available adaptive VC
+//                 return true;
+//             }
+//         }
+//     }
 
-    return false; // No adaptive VCs appear to be available
-}
+//     return false; // No adaptive VCs appear to be available
+// }
 
 // Helper function to calculate congestion score for a specific virtual network
 int
@@ -854,6 +869,47 @@ RoutingUnit::applyTieBreakingStrategy(const std::vector<PortDirection>& tie_cand
                 strategy.c_str());
         return applyTieBreakingStrategy(tie_candidates, "x_first", all_candidates);
     }
+}
+
+// Compute escape VC direction using mesh-style routing (no wrap-around edges)
+// This ensures deadlock-free routing by maintaining a strict ordering
+PortDirection
+RoutingUnit::computeEscapeVCDirection(int my_x, int my_y, int my_z,
+                                     int dest_x, int dest_y, int dest_z,
+                                     int dim_x, int dim_y, int dim_z)
+{
+    // Mesh-style dimension-order routing: X first, then Y, then Z
+    // No wrap-around edges - always take the direct path
+    
+    // Route in X dimension first
+    if (my_x != dest_x) {
+        if (dest_x > my_x) {
+            return "East";   // Move in positive X direction
+        } else {
+            return "West";   // Move in negative X direction  
+        }
+    }
+    
+    // Route in Y dimension second
+    if (my_y != dest_y) {
+        if (dest_y > my_y) {
+            return "North";  // Move in positive Y direction
+        } else {
+            return "South";  // Move in negative Y direction
+        }
+    }
+    
+    // Route in Z dimension last
+    if (my_z != dest_z) {
+        if (dest_z > my_z) {
+            return "Up";     // Move in positive Z direction
+        } else {
+            return "Down";   // Move in negative Z direction
+        }
+    }
+    
+    // Should not reach here if routing is called correctly
+    panic("computeEscapeVCDirection: No dimension needs routing - already at destination");
 }
 
 } // namespace garnet

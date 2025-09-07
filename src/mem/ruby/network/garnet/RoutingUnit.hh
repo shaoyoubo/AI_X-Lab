@@ -55,7 +55,8 @@ class RoutingUnit
     RoutingUnit(Router *router);
     int outportCompute(RouteInfo route,
                       int inport,
-                      PortDirection inport_dirn);
+                      PortDirection inport_dirn,
+                      flit* t_flit);
 
     // Topology-agnostic Routing Table based routing (default)
     void addRoute(std::vector<NetDest>& routing_table_entry);
@@ -86,7 +87,8 @@ class RoutingUnit
     // Adaptive Routing for 3D Torus with Duato-style Escape VC
     int outportComputeTorus3DAdaptive(RouteInfo route,
                                      int inport,
-                                     PortDirection inport_dirn);
+                                     PortDirection inport_dirn,
+                                     flit* t_flit);
 
     // Helper functions for adaptive routing
     bool checkAdaptiveVCAvailability(int outport_idx);
@@ -111,6 +113,11 @@ class RoutingUnit
     PortDirection applyTieBreakingStrategy(const std::vector<PortDirection>& tie_candidates,
                                           const std::string& strategy,
                                           const std::vector<PortDirection>& all_candidates);
+
+    // Escape VC routing function (mesh-style, no wrap-around)
+    PortDirection computeEscapeVCDirection(int my_x, int my_y, int my_z,
+                                          int dest_x, int dest_y, int dest_z,
+                                          int dim_x, int dim_y, int dim_z);
 
 
   private:

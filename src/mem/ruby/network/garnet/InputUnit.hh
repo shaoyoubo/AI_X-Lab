@@ -66,6 +66,8 @@ class InputUnit : public Consumer
     inline void
     set_vc_idle(int vc, Tick curTime)
     {
+        // printf("[InputUnit Debug] Router %d: Setting VC %d to IDLE at tick %lu\n", 
+        //        m_router->get_id(), vc, curTime);
         virtualChannels[vc].set_idle(curTime);
     }
 

@@ -115,6 +115,9 @@ class flit
 
     uint32_t m_width;
     int msgSize;
+
+    void set_use_escape_vc(bool val) { use_escape_vc = val; }
+    bool get_use_escape_vc() { return use_escape_vc; }
   protected:
     int m_packet_id;
     int m_id;
@@ -129,6 +132,7 @@ class flit
     int m_outport;
     Tick src_delay;
     std::pair<flit_stage, Tick> m_stage;
+    bool use_escape_vc = false;
 };
 
 inline std::ostream&

@@ -92,10 +92,12 @@ InputUnit::wakeup()
 
             assert(virtualChannels[vc].get_state() == IDLE_);
             set_vc_active(vc, curTick());
+            // printf("[InputUnit Debug] Router %d: HEAD flit sets VC %d to ACTIVE, type=%d\n", 
+            //        m_router->get_id(), vc, t_flit->get_type());
 
             // Route computation for this vc
             int outport = m_router->route_compute(t_flit->get_route(),
-                m_id, m_direction);
+                m_id, m_direction, t_flit);
 
             // Update output port in VC
             // All flits in this packet will use this output port
@@ -103,6 +105,13 @@ InputUnit::wakeup()
             grant_outport(vc, outport);
 
         } else {
+            // Debug output for assertion failure
+            // if (virtualChannels[vc].get_state() != ACTIVE_) {
+            //     printf("[InputUnit Debug] Router %d: BODY/TAIL flit VC %d state is %d, expected ACTIVE_ (%d)\n", 
+            //            m_router->get_id(), vc, virtualChannels[vc].get_state(), ACTIVE_);
+            //     printf("[InputUnit Debug] Flit type: %d, Route: src=%d, dest=%d\n",
+            //            t_flit->get_type(), t_flit->get_route().src_router, t_flit->get_route().dest_router);
+            // }
             assert(virtualChannels[vc].get_state() == ACTIVE_);
         }
 

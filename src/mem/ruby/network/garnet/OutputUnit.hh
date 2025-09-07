@@ -40,6 +40,7 @@
 #include "mem/ruby/network/garnet/CommonTypes.hh"
 #include "mem/ruby/network/garnet/NetworkLink.hh"
 #include "mem/ruby/network/garnet/OutVcState.hh"
+#include "mem/ruby/network/garnet/flit.hh"
 
 namespace gem5
 {
@@ -68,7 +69,9 @@ class OutputUnit : public Consumer
     void increment_credit(int out_vc);
     bool has_credit(int out_vc);
     bool has_free_vc(int vnet);
+    bool has_free_vc_3dTorus_adaptive(int vnet, flit* t_flit);
     int select_free_vc(int vnet);
+    int select_free_vc_3dTorus_adaptive(int vnet, flit* t_flit);
 
     inline PortDirection get_direction() { return m_direction; }
 

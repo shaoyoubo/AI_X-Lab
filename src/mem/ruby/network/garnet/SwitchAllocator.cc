@@ -127,7 +127,7 @@ SwitchAllocator::arbitrate_inports()
                 // check if the flit in this InputVC is allowed to be sent
                 // send_allowed conditions described in that function.
                 bool make_request =
-                    send_allowed(inport, invc, outport, outvc);
+                    send_allowed(inport, invc, outport, outvc, input_unit->peekTopFlit(invc));
 
                 if (make_request) {
                     m_input_arbiter_activity++;
@@ -182,7 +182,7 @@ SwitchAllocator::arbitrate_outports()
                 int outvc = input_unit->get_outvc(invc);
                 if (outvc == -1) {
                     // VC Allocation - select any free VC from outport
-                    outvc = vc_allocate(outport, inport, invc);
+                    outvc = vc_allocate(outport, inport, invc, input_unit->peekTopFlit(invc));
                 }
 
                 // remove flit from Input VC
@@ -228,6 +228,8 @@ SwitchAllocator::arbitrate_outports()
                     assert(!(input_unit->isReady(invc, curTick())));
 
                     // Free this VC
+                    // printf("[SwitchAllocator Debug] Router %d: Setting input VC %d to IDLE (flit type %d)\n", 
+                    //        m_router->get_id(), invc, t_flit->get_type());
                     input_unit->set_vc_idle(invc, curTick());
 
                     // Send a credit back
@@ -281,8 +283,14 @@ SwitchAllocator::arbitrate_outports()
  */
 
 bool
-SwitchAllocator::send_allowed(int inport, int invc, int outport, int outvc)
+SwitchAllocator::send_allowed(int inport, int invc, int outport, int outvc, flit* t_flit)
 {
+    // Used 3D Torus send_allowed function
+    RoutingAlgorithm routing_algorithm =
+        (RoutingAlgorithm) m_router->get_net_ptr()->getRoutingAlgorithm();
+    if (routing_algorithm == TORUS3D_ADAPTIVE_) {
+        return send_allowed_3dTorus_adaptive(inport, invc, outport, outvc, t_flit);
+    }
     // Check if outvc needed
     // Check if credit needed (for multi-flit packet)
     // Check if ordering violated (in ordered vnet)
@@ -337,10 +345,88 @@ SwitchAllocator::send_allowed(int inport, int invc, int outport, int outvc)
     return true;
 }
 
+
+bool
+SwitchAllocator::send_allowed_3dTorus_adaptive(int inport, int invc, int outport, int outvc, flit* t_flit)
+{
+    // Check if outvc needed
+    // Check if credit needed (for multi-flit packet)
+    // Check if ordering violated (in ordered vnet)
+
+    int vnet = get_vnet(invc);
+    bool has_outvc = (outvc != -1);
+    bool has_credit = false;
+
+    auto output_unit = m_router->getOutputUnit(outport);
+    if (!has_outvc) {
+
+        // needs outvc
+        // this is only true for HEAD and HEAD_TAIL flits.
+
+        if (output_unit->has_free_vc_3dTorus_adaptive(vnet, t_flit)) {
+
+            has_outvc = true;
+
+            // each VC has at least one buffer,
+            // so no need for additional credit check
+            has_credit = true;
+        }
+    } else {
+        has_credit = output_unit->has_credit(outvc);
+    }
+
+    // cannot send if no outvc or no credit.
+    if (!has_outvc || !has_credit)
+        return false;
+
+
+    // protocol ordering check
+    if ((m_router->get_net_ptr())->isVNetOrdered(vnet)) {
+        auto input_unit = m_router->getInputUnit(inport);
+
+        // enqueue time of this flit
+        Tick t_enqueue_time = input_unit->get_enqueue_time(invc);
+
+        // check if any other flit is ready for SA and for same output port
+        // and was enqueued before this flit
+        int vc_base = vnet*m_vc_per_vnet;
+        bool use_escape_vc = t_flit->get_use_escape_vc();
+        GarnetNetwork* garnet_net = safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
+        uint32_t escape_vcs = garnet_net->getEscapeVCs();
+        if (use_escape_vc) {    
+            for (int vc_offset = 0; vc_offset < escape_vcs; vc_offset++) {
+                int temp_vc = vc_base + vc_offset;
+                if (input_unit->need_stage(temp_vc, SA_, curTick()) &&
+                (input_unit->get_outport(temp_vc) == outport) &&
+                (input_unit->get_enqueue_time(temp_vc) < t_enqueue_time)) {
+                    return false;
+                }
+            }
+        } else {
+            for (int vc_offset = escape_vcs; vc_offset < m_vc_per_vnet; vc_offset++) {
+                int temp_vc = vc_base + vc_offset;
+                if (input_unit->need_stage(temp_vc, SA_, curTick()) &&
+                (input_unit->get_outport(temp_vc) == outport) &&
+                (input_unit->get_enqueue_time(temp_vc) < t_enqueue_time)) {
+                    return false;
+                }
+            }
+        }
+    }
+    
+    return true;
+}
+
 // Assign a free VC to the winner of the output port.
 int
-SwitchAllocator::vc_allocate(int outport, int inport, int invc)
+SwitchAllocator::vc_allocate(int outport, int inport, int invc, flit* t_flit)
 {
+    // Used 3D Torus vc_allocate function
+    RoutingAlgorithm routing_algorithm =
+        (RoutingAlgorithm) m_router->get_net_ptr()->getRoutingAlgorithm();
+    if (routing_algorithm == TORUS3D_ADAPTIVE_) {
+        return vc_allocate_3dTorus_adaptive(outport, inport, invc, t_flit);
+    }
     // Select a free VC from the output port
     int outvc =
         m_router->getOutputUnit(outport)->select_free_vc(get_vnet(invc));
@@ -350,6 +436,23 @@ SwitchAllocator::vc_allocate(int outport, int inport, int invc)
     m_router->getInputUnit(inport)->grant_outvc(invc, outvc);
     return outvc;
 }
+
+
+int
+SwitchAllocator::vc_allocate_3dTorus_adaptive(int outport, int inport, int invc, flit* t_flit)
+{
+
+    // Select a free VC from the output port
+    int outvc =
+        m_router->getOutputUnit(outport)->select_free_vc_3dTorus_adaptive(get_vnet(invc), t_flit);
+
+    // has to get a valid VC since it checked before performing SA
+    assert(outvc != -1);
+    m_router->getInputUnit(inport)->grant_outvc(invc, outvc);
+    return outvc;
+}
+
+
 
 // Wakeup the router next cycle to perform SA again
 // if there are flits ready.

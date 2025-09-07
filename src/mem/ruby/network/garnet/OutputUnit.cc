@@ -36,6 +36,7 @@
 #include "mem/ruby/network/garnet/CreditLink.hh"
 #include "mem/ruby/network/garnet/Router.hh"
 #include "mem/ruby/network/garnet/flitBuffer.hh"
+#include "mem/ruby/network/garnet/flit.hh"
 
 namespace gem5
 {
@@ -106,6 +107,27 @@ OutputUnit::has_free_vc(int vnet)
     return false;
 }
 
+bool
+OutputUnit::has_free_vc_3dTorus_adaptive(int vnet, flit* t_flit)
+{
+    bool use_escape_vc = t_flit->get_use_escape_vc();
+    int vc_base = vnet*m_vc_per_vnet;
+    GarnetNetwork* garnet_net = safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
+    uint32_t escape_vcs = garnet_net->getEscapeVCs();
+    if (use_escape_vc) {
+        for (int vc = vc_base; vc < vc_base + escape_vcs; vc++) {
+            if (is_vc_idle(vc, curTick()))
+                return true;
+        }
+    }
+    else {
+        for (int vc = vc_base + escape_vcs; vc < vc_base + m_vc_per_vnet; vc++) {
+            if (is_vc_idle(vc, curTick()))
+                return true;
+        }
+    }
+    return false;
+}
 // Assign a free output VC to the winner of Switch Allocation
 int
 OutputUnit::select_free_vc(int vnet)
@@ -121,6 +143,32 @@ OutputUnit::select_free_vc(int vnet)
     return -1;
 }
 
+int
+OutputUnit::select_free_vc_3dTorus_adaptive(int vnet, flit* t_flit)
+{
+    bool use_escape_vc = t_flit->get_use_escape_vc();
+    int vc_base = vnet*m_vc_per_vnet;
+    GarnetNetwork* garnet_net = safe_cast<GarnetNetwork*>(m_router->get_net_ptr());
+    uint32_t escape_vcs = garnet_net->getEscapeVCs();
+    if (use_escape_vc) {
+        for (int vc = vc_base; vc < vc_base + escape_vcs; vc++) {
+            if (is_vc_idle(vc, curTick())) {
+                outVcState[vc].setState(ACTIVE_, curTick());
+                return vc;
+            }
+        }
+    }
+    else {
+        for (int vc = vc_base + escape_vcs; vc < vc_base + m_vc_per_vnet; vc++) {
+            if (is_vc_idle(vc, curTick())) {
+                outVcState[vc].setState(ACTIVE_, curTick());
+                return vc;
+            }
+        }
+    }
+
+    return -1;
+}
 /*
  * The wakeup function of the OutputUnit reads the credit signal from the
  * downstream router for the output VC (i.e., input VC at downstream router).
