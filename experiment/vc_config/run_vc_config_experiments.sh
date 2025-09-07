@@ -1,0 +1,160 @@
+#!/bin/bash
+# Lab4 Virtual Channel Configuration Experiment Script
+# Study the impact of different VC configurations in adaptive routing
+# 3D Torus 4x4x4, 64 CPUs, 64 dirs, adaptive routing (algorithm=4)
+
+# Set results directory
+results_dir="./results/vc_config"
+mkdir -p $results_dir
+
+echo "Starting Lab4 Experiment: Impact of virtual channel configurations"
+echo "Configuration: 4x4x4 3D Torus, 64 CPUs, 64 dirs, adaptive routing (algorithm=4)"
+echo "Testing (vcs-per-vnet, escape-vcs) combinations"
+echo "Traffic pattern: bit_reverse"
+echo "========================================================================"
+
+# Using only bit_reverse traffic pattern
+pattern="bit_reverse"
+
+# VC configuration combinations: (vcs-per-vnet, escape-vcs)
+# Format: "vcs_per_vnet escape_vcs"
+declare -a vc_configs=(
+    "1 1"
+    "2 1"
+    "2 2"
+    "4 1"
+    "4 2"
+    "4 3"
+    "4 4"
+    "8 1"
+    "8 2"
+    "8 4"
+    "8 8"
+)
+
+# injection rates from 0.01 to 1.0
+injection_rates=(0.01 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
+
+# Function to extract statistics
+extract_stats() {
+    local rate=$1
+
+    # Extract statistics
+    packets_received=$(grep "packets_received::total" m5out/stats.txt | awk '{print $2}')
+    packets_injected=$(grep "packets_injected::total" m5out/stats.txt | awk '{print $2}')
+    avg_packet_latency=$(grep "average_packet_latency" m5out/stats.txt | awk '{print $2}')
+    avg_hops=$(grep "average_hops" m5out/stats.txt | awk '{print $2}')
+
+    # Extract network latency and queuing latency
+    avg_packet_network_latency=$(grep "average_packet_network_latency" m5out/stats.txt | awk '{print $2}')
+    avg_packet_queueing_latency=$(grep "average_packet_queueing_latency" m5out/stats.txt | awk '{print $2}')
+
+    # Try alternative names if not found
+    if [ -z "$avg_packet_network_latency" ] || [ "$avg_packet_network_latency" = "(Unspecified)" ]; then
+        avg_packet_network_latency=$(grep "avg_packet_network_latency" m5out/stats.txt | awk '{print $2}')
+    fi
+    if [ -z "$avg_packet_queueing_latency" ] || [ "$avg_packet_queueing_latency" = "(Unspecified)" ]; then
+        avg_packet_queueing_latency=$(grep "avg_packet_queueing_latency" m5out/stats.txt | awk '{print $2}')
+    fi
+
+    # Handle (Unspecified) values
+    [ "$packets_received" = "(Unspecified)" ] && packets_received="0"
+    [ "$packets_injected" = "(Unspecified)" ] && packets_injected="0"
+    [ "$avg_packet_latency" = "(Unspecified)" ] && avg_packet_latency="0"
+    [ "$avg_hops" = "(Unspecified)" ] && avg_hops="0"
+    [ "$avg_packet_network_latency" = "(Unspecified)" ] && avg_packet_network_latency="0"
+    [ "$avg_packet_queueing_latency" = "(Unspecified)" ] && avg_packet_queueing_latency="0"
+
+    # Calculate throughput
+    if [ ! -z "$packets_received" ] && [ "$packets_received" != "0" ]; then
+        throughput=$(python3 -c "print(f'{$packets_received / 10000:.6f}')")
+        per_node_throughput=$(python3 -c "print(f'{($packets_received / 10000) / 64:.6f}')")
+    else
+        throughput="0.000000"
+        per_node_throughput="0.000000"
+    fi
+
+    echo "$rate,$throughput,$per_node_throughput,$avg_packet_latency,$avg_hops,$avg_packet_network_latency,$avg_packet_queueing_latency,$packets_received,$packets_injected"
+}
+
+# Main experiment loop - only bit_reverse pattern
+echo ""
+echo "Testing traffic pattern: $pattern"
+echo "=================================================="
+
+for vc_config in "${vc_configs[@]}"; do
+    # Parse the configuration
+    read -r vcs_per_vnet escape_vcs <<< "$vc_config"
+
+    echo ""
+    echo "VC Configuration: vcs-per-vnet=$vcs_per_vnet, escape-vcs=$escape_vcs"
+    adaptive_vcs=$((vcs_per_vnet - escape_vcs))
+    echo "  → Escape VCs: $escape_vcs, Adaptive VCs: $adaptive_vcs"
+    echo "-----------------------------------------------------------"
+
+    # Validate configuration
+    if [ $escape_vcs -gt $vcs_per_vnet ]; then
+        echo "  ERROR: escape-vcs ($escape_vcs) cannot be greater than vcs-per-vnet ($vcs_per_vnet)"
+        continue
+    fi
+
+    # Create result file for this combination
+    result_file="$results_dir/${pattern}_vcs${vcs_per_vnet}_escape${escape_vcs}_results.csv"
+    > $result_file  # Clear file
+
+    # Add CSV header
+    echo "injection_rate,throughput,per_node_throughput,avg_latency,avg_hops,network_latency,queueing_latency,packets_received,packets_injected" > $result_file
+
+    for rate in "${injection_rates[@]}"; do
+        echo "  Injection Rate: $rate"
+
+        # Run gem5 simulation
+        ./build/NULL/gem5.opt configs/example/garnet_synth_traffic.py \
+            --network=garnet --num-cpus=64 --num-dirs=64 \
+            --topology=Torus3D --torus-x=4 --torus-y=4 --torus-z=4 \
+            --routing-algorithm=4 --synthetic=$pattern \
+            --sim-cycles=10000 --injectionrate=$rate \
+            --inj-vnet=2 --adaptive-tie-breaking=x_first \
+            --vcs-per-vnet=$vcs_per_vnet \
+            --escape-vcs=$escape_vcs \
+            > /dev/null 2>&1
+
+        # Check if simulation succeeded
+        if [ $? -eq 0 ]; then
+            # Extract and save statistics
+            stats_line=$(extract_stats "$rate")
+            echo "$stats_line" >> $result_file
+
+            # Display progress
+            throughput=$(echo "$stats_line" | cut -d',' -f2)
+            latency=$(echo "$stats_line" | cut -d',' -f4)
+            echo "    Throughput: $throughput, Latency: $latency"
+        else
+            echo "    FAILED: Rate $rate"
+            echo "$rate,FAILED,FAILED,FAILED,FAILED,FAILED,FAILED,FAILED,FAILED" >> $result_file
+        fi
+    done
+
+    echo "Results saved to: $result_file"
+done
+
+echo ""
+echo "========================================"
+echo "All VC configuration experiments completed!"
+echo "Results directory: $results_dir"
+echo ""
+echo "Generated files:"
+ls -la $results_dir/*.csv
+echo ""
+echo "Files generated:"
+for vc_config in "${vc_configs[@]}"; do
+    read -r vcs_per_vnet escape_vcs <<< "$vc_config"
+    echo "  ${pattern}_vcs${vcs_per_vnet}_escape${escape_vcs}_results.csv"
+done
+echo ""
+echo "VC Configuration Meanings:"
+echo "  vcs-per-vnet: Total number of virtual channels per virtual network"
+echo "  escape-vcs: Number of escape VCs (used for deadlock-free routing)"
+echo "  adaptive-vcs: Remaining VCs used for adaptive routing (vcs-per-vnet - escape-vcs)"
+echo ""
+echo "Use plot_vc_config.py to generate VC configuration comparison plots."

@@ -1,0 +1,4 @@
+inj_vnet,vnet_type,packet_type,max_throughput,min_latency,latency_at_50pct_throughput,avg_hops_mean
+-1,Random injection,Mixed (1-flit & 5-flit),27.0495,11.659184,15.439183243941507,2.536377272727273
+0,Control packets,1-flit,31.8711,10.053333,10.272801037945035,2.5050805454545455
+2,Data packets,5-flit,9.274,15.195873,18.33953351590673,2.541041636363637
